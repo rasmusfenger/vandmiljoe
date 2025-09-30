@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ålegræs – interaktivt kort</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root {
+      --blue: #2563eb;
+      --green: #16a34a;
+      --panel-border: #e5e7eb;
+      --muted: #6b7280;
+    }
+    html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+    #app { display: grid; grid-template-columns: 1fr 460px; height: 100%; }
+    #map { width: 100%; height: 100%; }
+    #panel { display: flex; flex-direction: column; border-left: 1px solid var(--panel-border); background: #fff; }
+    #filters { padding: 10px; border-bottom: 1px solid var(--panel-border); background: #f9fafb; }
+    #filters h2 { font-size: 16px; margin-top: 0; }
+    #filters label { display: block; margin: 6px 0; font-size: 14px; }
+    #filters input, #filters select { margin-top: 2px; }
+    #info { flex: 1; padding: 14px; overflow-y: auto; }
+    #chart-container { flex: 1; padding: 12px 14px 14px; border-top: 1px solid var(--panel-border); display: flex; flex-direction: column; }
+    #chart { flex: 1; }
+    h1 { font-size: 18px; margin: 6px 0 8px; }
+    p, li { color: #111827; font-size: 14px; line-height: 1.45; }
+    .muted { color: var(--muted); font-size: 12px; }
+    ul { margin: 6px 0 0 18px; }
+    img { max-width: 100%; border-radius: 10px; margin: 8px 0; display: block; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <div id="panel">
+    <div id="filters">
+      <h2>Filtrér data</h2>
+      <label>
+        Minimum antal undersøgelser:
+        <input type="range" id="minObs" min="1" max="50" value="10">
+        <span id="minObsVal">10</span>
+      </label>
+      <label>
+        Tidsperiode (år):
+        <input type="number" id="yearFrom" value="2000" style="width:70px;"> -
+        <input type="number" id="yearTo" value="2025" style="width:70px;">
+      </label>
+      <label>
+        Kommune/Region:
+        <select id="regionSelect">
+          <option value="all">Alle</option>
+          <option value="Odense">Odense</option>
+          <option value="Aarhus">Aarhus</option>
+          <!-- TODO: Udvid listen med rigtige værdier fra din JSON -->
+        </select>
+      </label>
+    </div>
+    <div id="info">
+      <h1>Ålegræs (Zostera marina)</h1>
+      <p>Ålegræs er en blomsterplante, der vokser på havbunden i kystnære områder. 
+         Det binder kulstof, stabiliserer havbunden og skaber levesteder for fisk og smådyr.</p>
+      <ul>
+        <li><b>Hovedudbredelse (H)</b> – den dybde, hvor ålegræsset dækker mest.</li>
+        <li><b>Maksimal dybdegrænse (M)</b> – den dybeste forekomst.</li>
+      </ul>
+      <p class="muted">Data: NOVANA · <a href="https://miljoeportal.dk" target="_blank">Danmarks Miljøportal</a></p>
+    </div>
+    <div id="chart-container">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@2.9.2/dist/proj4.js"></script>
+
+<script>
+const EPSG25832 = "+proj=utm +zone=32 +ellps=GRS80 +units=m +no_defs";
+let map = L.map('map').setView([55.0, 10.5], 7);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; OpenStreetMap' }).addTo(map);
+
+let chart;
+let allStations = [];
+let filteredStations = [];
+
+function renderChart(station) {
+  const ctx = document.getElementById('chart').getContext('2d');
+  const labels = Array.from(new Set([
+    ...station.seriesH.map(d=>d.year),
+    ...station.seriesM.map(d=>d.year)
+  ])).sort((a,b)=>a-b);
+
+  const toSeries = (labels, series) => labels.map(y => {
+    const f = series.find(d => d.year===y);
+    return f ? f.mean : null;
+  });
+
+  const dataH = toSeries(labels, station.seriesH);
+  const dataM = toSeries(labels, station.seriesM);
+
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Hovedudbredelse (H)', data: dataH, borderColor: getComputedStyle(document.documentElement).getPropertyValue('--blue').trim(), backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--blue').trim(), tension: 0.25, pointRadius: 3, pointHoverRadius: 5, spanGaps: true },
+        { label: 'Maks dybdegrænse (M)', data: dataM, borderColor: getComputedStyle(document.documentElement).getPropertyValue('--green').trim(), backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--green').trim(), tension: 0.25, pointRadius: 3, pointHoverRadius: 5, spanGaps: true }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top' },
+        title: { display: true, text: station.stednavn },
+        tooltip: { enabled: true }
+      },
+      scales: {
+        y: { title: { display: true, text: 'Dybde (m)' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+        x: { title: { display: false }, grid: { color: 'rgba(0,0,0,0.04)' } }
+      },
+      interaction: { mode: 'nearest', intersect: false }
+    }
+  });
+}
+
+function applyFilters() {
+  const minObs = parseInt(document.getElementById('minObs').value);
+  document.getElementById('minObsVal').textContent = minObs;
+  const yearFrom = parseInt(document.getElementById('yearFrom').value);
+  const yearTo = parseInt(document.getElementById('yearTo').value);
+  const region = document.getElementById('regionSelect').value;
+
+  filteredStations = allStations.filter(st => {
+    const totalObs = Math.max(st.seriesH.length, st.seriesM.length);
+    if (totalObs < minObs) return false;
+    const years = [...st.seriesH.map(d=>d.year), ...st.seriesM.map(d=>d.year)];
+    if (years.every(y => y < yearFrom || y > yearTo)) return false;
+    if (region !== "all" && st.region !== region) return false;
+    return true;
+  });
+
+  updateMap();
+}
+
+function updateMap() {
+  // fjern gamle markører
+  map.eachLayer(l => {
+    if (l instanceof L.Marker) map.removeLayer(l);
+  });
+  // tilføj filtrerede stationer
+  filteredStations.forEach(st => {
+    const [lon, lat] = proj4(EPSG25832, 'EPSG:4326', [st.easting, st.northing]);
+    const marker = L.marker([lat, lon]).addTo(map);
+    marker.bindTooltip(st.stednavn);
+    marker.on('click', () => renderChart(st));
+  });
+  if (filteredStations.length) {
+    const [lon, lat] = proj4(EPSG25832, 'EPSG:4326', [filteredStations[0].easting, filteredStations[0].northing]);
+    map.setView([lat, lon], 8);
+    renderChart(filteredStations[0]);
+  }
+}
+
+document.getElementById('minObs').addEventListener('input', applyFilters);
+document.getElementById('yearFrom').addEventListener('change', applyFilters);
+document.getElementById('yearTo').addEventListener('change', applyFilters);
+document.getElementById('regionSelect').addEventListener('change', applyFilters);
+
+async function init() {
+  const res = await fetch('aalegraes_stations.json');
+  const { stations } = await res.json();
+  allStations = stations;
+  applyFilters();
+}
+init();
+</script>
+</body>
+</html>
