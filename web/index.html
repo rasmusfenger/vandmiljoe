@@ -173,7 +173,7 @@ document.getElementById('yearTo').addEventListener('change', applyFilters);
 document.getElementById('regionSelect').addEventListener('change', applyFilters);
 
 async function init() {
-  const res = await fetch('aalegraes_stations.json');
+  const res = await fetch('json/aalegraes_stations.json');
   const { stations } = await res.json();
   allStations = stations;
   applyFilters();
